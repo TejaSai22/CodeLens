@@ -4,25 +4,21 @@ CodeLens indexes a GitHub repository or local codebase and lets you ask natural-
 
 It uses **local embeddings** for retrieval (your code is embedded on your machine) and **Google Gemini** for answer generation. Retrieval is **hybrid** — dense vector search fused with BM25 keyword search via Reciprocal Rank Fusion — and source files are chunked along **syntax boundaries** (functions, classes, structs, interfaces…) using tree-sitter across all supported languages.
 
+What sets it apart from a generic RAG demo: every answer **shows its work**. The UI surfaces exactly which code chunks were retrieved and *why* — whether each one came from semantic (vector) or keyword (BM25) search, its BM25 score, its dense rank, and the fused RRF score. CodeLens is meant to be a tool you can *learn retrieval from*, not just query.
+
+## Highlights
+
+- **Hybrid retrieval** — dense (ChromaDB cosine) + sparse (BM25) fused with Reciprocal Rank Fusion.
+- **"Show your work" panel** — per-chunk provenance: `vector` vs `keyword` match, BM25 score, dense rank, RRF score, AST node type.
+- **Syntax-aware chunking** — tree-sitter AST chunks (functions, classes, structs…) across 10 languages, with a sliding-window fallback.
+- **Multi-repo** — index many repositories, each in its own collection, switchable from the sidebar.
+- **Async indexing** with live progress, **streamed** answers (SSE), and **grounded** citations.
+- **Local-first embeddings** (your code never leaves the machine for retrieval); only the final prompt goes to Gemini.
+- **Polished UI** — minimal IDE/terminal aesthetic with a persisted light/dark theme.
+
 ## Architecture
 
-```
-                ┌─────────────────┐
-                │  React + Vite   │  ← primary UI (codelens-ui/)
-                │  Streamlit      │  ← optional UI (src/app.py)
-                └────────┬────────┘
-                         │ HTTP (JSON)
-                ┌────────▼────────┐
-                │   FastAPI API   │  src/api/
-                │  /index /query  │
-                └────────┬────────┘
-        ┌────────────────┼────────────────┐
-        ▼                ▼                 ▼
-   Ingestion         Retrieval         Generation
-  repo_loader      vector_store        llm_client
-   chunker         (ChromaDB +         (Gemini)
-   embedder         BM25 + RRF)
-```
+<p align="center"><img src="docs/architecture.svg" alt="CodeLens architecture" width="760"></p>
 
 | Concern | Implementation |
 |---|---|
@@ -64,8 +60,26 @@ The API serves:
 - `POST /api/v1/rag/index` — start indexing a repo (`{"repo_input": "<github-url-or-local-path>"}`), returns immediately with status `indexing`
 - `GET  /api/v1/rag/repos` — list indexed repos and their status
 - `DELETE /api/v1/rag/repos/{repo_id}` — delete a repo's index
-- `POST /api/v1/rag/query` — ask a question (`{"repo_id": "...", "query": "...", "conversation_history": [...], "language_filter": "python"}`)
-- `POST /api/v1/rag/query/stream` — same, but streams the answer as Server-Sent Events
+- `POST /api/v1/rag/query` — ask a question (`{"repo_id": "...", "query": "...", "conversation_history": [...], "language_filter": "python"}`). Returns the answer plus `sources[]`, each carrying retrieval **provenance** (see below).
+- `POST /api/v1/rag/query/stream` — same, but streams the answer as Server-Sent Events (a `sources` frame first, then `token` frames)
+
+Each source in the response includes a `retrieval` object explaining *why* it surfaced:
+
+```jsonc
+{
+  "file_path": "src/requests/sessions.py",
+  "start_line": 301, "end_line": 340,
+  "chunk_type": "class", "language": "python",
+  "similarity": 0.0322,            // == retrieval.rrf_score (kept for back-compat)
+  "retrieval": {
+    "matched_by": ["vector", "keyword"], // which retriever(s) hit it
+    "dense_rank": 2,                       // rank in vector results (null if keyword-only)
+    "bm25_score": 7.28,                    // raw BM25 score (null if vector-only)
+    "rrf_score": 0.0322,                   // fused reciprocal-rank-fusion score
+    "rank": 0                              // final fused rank
+  }
+}
+```
 
 When `API_KEY` is set, all `/api/v1/rag/*` routes require an `X-API-Key` header.
 
@@ -133,9 +147,20 @@ All settings are read from `.env` (see `.env.example`):
 
 **Querying** (`POST /query`)
 1. Embed the question locally.
-2. Retrieve candidates with **hybrid search**: dense cosine similarity + BM25, fused with Reciprocal Rank Fusion.
-3. Send the question, retrieved snippets, and recent conversation history to Gemini.
-4. Return the answer plus the source chunks (file path, line range, relevance) for citation.
+2. Retrieve candidates with **hybrid search**: dense cosine similarity + BM25, fused with Reciprocal Rank Fusion. Per-retriever provenance is preserved through fusion.
+3. Send the question, retrieved snippets, and recent conversation history to Gemini. The model reasons internally (native thinking) and replies directly — no chain-of-thought leaks into the answer.
+4. Return the answer plus the source chunks, each annotated with **why it was retrieved** (vector/keyword, BM25 score, dense rank, RRF score) for citation and transparency.
+
+### Retrieval transparency ("show your work")
+
+Most code-RAG demos hand you an answer and a flat list of "sources." CodeLens
+shows the *mechanics*: the right-hand panel renders, for every retrieved chunk,
+whether it was found by **semantic** (vector) search, **keyword** (BM25) search,
+or **both** — alongside the raw BM25 score, the dense rank, and the fused RRF
+score. It makes the trade-off between dense and sparse retrieval visible: you can
+watch a chunk get pulled in purely on a lexical keyword match that the embedding
+missed, or vice-versa. The data comes straight from `hybrid_query`, which
+attaches a `retrieval` record to each fused result.
 
 ## Supported file types
 
@@ -146,7 +171,7 @@ All of the above get AST-aware chunking via tree-sitter (`tree-sitter-language-p
 ## Testing
 
 ```bash
-uv run pytest tests/test_chunker.py tests/test_vector_store.py tests/test_api.py
+uv run pytest            # full suite (unit, API, integration, eval-metrics)
 ```
 
 `tests/test_integration.py` exercises the local pipeline (loading, chunking, embedding, retrieval) and needs no API key. CI (`.github/workflows/ci.yml`) runs the unit, API, integration and eval-metric tests on every push and PR to `main`.
@@ -189,7 +214,9 @@ codelens/
 │   │   ├── chunker.py           # tree-sitter + sliding-window chunking
 │   │   └── embedder.py          # Local sentence-transformers embeddings
 │   ├── retrieval/
-│   │   └── vector_store.py      # ChromaDB + BM25 + RRF hybrid search
+│   │   ├── vector_store.py      # ChromaDB + BM25 + RRF hybrid search (+ provenance)
+│   │   ├── vector_store_manager.py # per-repo collections
+│   │   └── repo_registry.py     # SQLite registry of indexed repos
 │   ├── generation/
 │   │   └── llm_client.py        # Google Gemini client
 │   └── app.py                   # Optional Streamlit frontend
@@ -207,10 +234,14 @@ collection and selectable from the sidebar. Indexing runs **asynchronously**:
 `GET /repos` to watch progress (cloning → chunking → embedding → ready). The
 BM25 keyword index is built lazily and persisted per repo.
 
+Optional **API-key auth** (`X-API-Key`) and **containerized deployment** (Docker
+Compose, see above) are already in place.
+
 Planned improvements:
 
-- Auth, rate limiting, and containerized deployment
+- Rate limiting and a hosted public demo
 - Expand the eval golden set (more languages, larger corpus) for stronger signal
+- Code-split the frontend bundle (syntax highlighter currently ships all grammars)
 
 ## License
 
