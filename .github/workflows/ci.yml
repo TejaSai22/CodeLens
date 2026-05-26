@@ -26,4 +26,4 @@ jobs:
       run: uv sync --all-extras
       
     - name: Run tests
-      run: uv run pytest tests/test_chunker.py tests/test_vector_store.py tests/test_repo_registry.py tests/test_api.py tests/test_integration.py tests/test_eval_metrics.py
+      run: uv run pytest tests/test_chunker.py tests/test_vector_store.py tests/test_repo_registry.py tests/test_api.py tests/test_integration.py tests/test_eval_metrics.py tests/test_llm_client.py

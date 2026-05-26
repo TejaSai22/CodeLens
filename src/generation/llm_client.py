@@ -95,9 +95,13 @@ INSTRUCTIONS:
 4. TONE: Be direct, highly technical, and avoid conversational filler."""
 
     def __init__(self, model_name: str = None):
-        """Initialize LLMClient with the Google Gen AI client."""
+        """Configure the client. The underlying genai.Client is created lazily
+        (see the `client` property) so importing/booting the API and running
+        indexing + retrieval never requires a GEMINI_API_KEY — only answer
+        generation does. This also lets the test suite import the app without a
+        key in CI."""
         self.model_name = model_name or settings.LLM_MODEL
-        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        self._client = None
         # The model reasons internally (Gemini 2.x native thinking) but
         # include_thoughts=False keeps that reasoning out of the response, so
         # the user only ever sees the final answer.
@@ -105,7 +109,20 @@ INSTRUCTIONS:
             system_instruction=self.SYSTEM_PROMPT,
             thinking_config=types.ThinkingConfig(include_thoughts=False),
         )
-        logger.info(f"Initialized Google Gen AI client: {self.model_name}")
+        logger.info(f"Configured Google Gen AI client (lazy): {self.model_name}")
+
+    @property
+    def client(self):
+        """Lazily construct the genai client on first use. Raises a clear error
+        if no key is configured at the point generation is actually attempted."""
+        if self._client is None:
+            if not settings.GEMINI_API_KEY:
+                raise RuntimeError(
+                    "GEMINI_API_KEY is not set. It is required for answer "
+                    "generation (indexing and retrieval work without it)."
+                )
+            self._client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        return self._client
 
     @staticmethod
     def _to_history(messages: Optional[List[Dict[str, str]]]) -> List[types.Content]:
