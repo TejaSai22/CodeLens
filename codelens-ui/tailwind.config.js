@@ -1,4 +1,11 @@
 /** @type {import('tailwindcss').Config} */
+
+// Semantic colors are backed by CSS variables (defined in index.css) so the
+// same class names work in both light and dark themes. Each variable holds a
+// space-separated RGB triple so Tailwind's <alpha-value> opacity modifier works
+// (e.g. bg-accent/10).
+const token = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 export default {
   content: [
     "./index.html",
@@ -8,53 +15,43 @@ export default {
   theme: {
     extend: {
       colors: {
-        "surface-tint": "#c6c6c7",
-        "primary-fixed": "#e2e2e2",
-        "primary-dim": "#b8b9b9",
-        "tertiary-container": "#eceaf3",
-        "on-tertiary-fixed-variant": "#626269",
-        "secondary-container": "#3a3b42",
-        "outline": "#75757c",
-        "tertiary-fixed": "#efedf6",
-        "secondary-dim": "#9d9da6",
-        "surface-container-lowest": "#000000",
-        "tertiary": "#fbf8ff",
-        "error-container": "#7f2927",
-        "surface": "#0e0e10",
-        "on-surface-variant": "#acaab1",
-        "on-surface": "#e7e4ec",
-        "error-dim": "#bb5551",
-        "outline-variant": "#47474e",
-        "on-primary": "#3f4041",
-        "on-secondary-fixed": "#3e3f46",
-        "error": "#ee7d77",
-        "surface-container-highest": "#25252b",
-        "inverse-primary": "#5e5f60",
-        "on-primary-fixed": "#3e4040",
-        "on-error-container": "#ff9993",
-        "surface-container-high": "#1f1f24",
-        "surface-variant": "#25252b",
-        "on-primary-container": "#d0d0d0",
-        "on-secondary-container": "#bfbec8",
-        "surface-container": "#19191d",
-        "background": "#0e0e10",
-        "secondary": "#9d9da6",
-        "on-background": "#e7e4ec",
-        "inverse-on-surface": "#565457",
-        "on-tertiary": "#5f5e66",
-        "surface-bright": "#2b2c32",
-        "surface-container-low": "#131316",
-        "inverse-surface": "#fcf8fb",
-        "primary-container": "#454747",
-        "surface-dim": "#0e0e10",
-        "on-secondary": "#1e2027",
-        "on-error": "#490106",
-        "on-tertiary-container": "#56565d",
-        "primary": "#c6c6c7",
+        canvas: token("canvas"),     // app background
+        panel: token("panel"),       // sidebars / cards
+        panel2: token("panel2"),     // raised surfaces
+        line: token("border"),       // borders / dividers
+        txt: token("text"),          // primary text
+        muted: token("muted"),       // secondary text
+        faint: token("faint"),       // tertiary text
+        accent: token("accent"),     // brand / primary action
+        vector: token("vector"),     // semantic (dense) retrieval signal
+        keyword: token("keyword"),   // lexical (BM25) retrieval signal
+        danger: token("danger"),
+        warn: token("warn"),
+        ok: token("ok"),
       },
       fontFamily: {
-        "inter": ["Inter", "sans-serif"],
-        "mono": ["JetBrains Mono", "monospace"]
+        "inter": ["Inter", "system-ui", "sans-serif"],
+        "mono": ["'JetBrains Mono'", "ui-monospace", "monospace"],
+      },
+      keyframes: {
+        scan: {
+          "0%": { transform: "translateY(-100%)", opacity: "0" },
+          "20%": { opacity: "1" },
+          "80%": { opacity: "1" },
+          "100%": { transform: "translateY(2000%)", opacity: "0" },
+        },
+        "fade-up": {
+          "0%": { opacity: "0", transform: "translateY(6px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        blink: { "0%,100%": { opacity: "1" }, "50%": { opacity: "0" } },
+        "bar-grow": { "0%": { transform: "scaleX(0)" }, "100%": { transform: "scaleX(1)" } },
+      },
+      animation: {
+        scan: "scan 1.1s cubic-bezier(0.4,0,0.2,1) infinite",
+        "fade-up": "fade-up 0.35s ease-out both",
+        blink: "blink 1s step-end infinite",
+        "bar-grow": "bar-grow 0.5s ease-out both",
       },
     },
   },
