@@ -332,3 +332,61 @@ def test_clear_removes_bm25_index(temp_vector_store):
 
     temp_vector_store.clear()
     assert not os.path.exists(temp_vector_store._bm25_path)
+
+
+def test_hybrid_query_attaches_retrieval_provenance(temp_vector_store):
+    """Each fused result must carry a 'retrieval' dict explaining *why* it
+    surfaced: which retriever(s) matched, the raw BM25 score, the dense rank,
+    the fused RRF score, and the final rank."""
+    # BM25 tokenizes on whitespace, so keep query terms as standalone tokens.
+    # Use several distinct docs: BM25 IDF collapses to ~0 for a term that
+    # appears in half the corpus, so the keyword must be genuinely rare.
+    contents = [
+        "def authenticate token verify session credential",  # 0 - the target
+        "def render template html layout component",         # 1
+        "def parse json yaml config loader",                 # 2
+        "def cache memory redis store expire",               # 3
+        "def schedule cron job worker queue",                # 4
+    ]
+    chunks = [
+        CodeChunk(
+            content=c, file_path=f"f{i}.py", language="python",
+            chunk_type="function", start_line=0, end_line=1,
+            metadata={"name": f"fn{i}"},
+        )
+        for i, c in enumerate(contents)
+    ]
+    # Distinct one-hot embedding directions so dense ranking is deterministic.
+    embeddings = []
+    for i in range(len(contents)):
+        v = [0.0] * 1536
+        v[i] = 1.0
+        embeddings.append(v)
+    temp_vector_store.add_chunks(chunks, embeddings)
+
+    q_emb = [0.0] * 1536
+    q_emb[0] = 0.9
+    q_emb[1] = 0.1
+    results = temp_vector_store.hybrid_query(
+        query_text="authenticate token",  # keyword-matches only chunk 0
+        query_embedding=q_emb,             # vector-nearest chunk 0
+        n_results=5,
+    )
+
+    assert len(results) >= 1
+    # Every result carries a well-formed provenance block.
+    for i, r in enumerate(results):
+        prov = r.get("retrieval")
+        assert prov is not None, "missing retrieval provenance"
+        assert prov["rank"] == i
+        assert prov["rrf_score"] > 0
+        assert prov["matched_by"], "matched_by should never be empty"
+        assert set(prov["matched_by"]).issubset({"vector", "keyword"})
+
+    # The auth chunk should be found by BOTH retrievers (vector + keyword).
+    top = results[0]
+    assert "authenticate" in top["content"]
+    assert "keyword" in top["retrieval"]["matched_by"]
+    assert "vector" in top["retrieval"]["matched_by"]
+    assert top["retrieval"]["bm25_score"] is not None and top["retrieval"]["bm25_score"] > 0
+    assert top["retrieval"]["dense_rank"] == 0

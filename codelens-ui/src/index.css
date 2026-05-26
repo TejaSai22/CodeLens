@@ -2,10 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------ *
+ * Theme tokens. Dark is the default (:root); .light overrides them.   *
+ * Values are space-separated RGB triples for Tailwind <alpha-value>.  *
+ * ------------------------------------------------------------------ */
+:root {
+  --canvas: 11 13 15;
+  --panel: 17 20 24;
+  --panel2: 23 27 32;
+  --border: 38 45 53;
+  --text: 230 237 243;
+  --muted: 139 148 158;
+  --faint: 92 102 114;
+  --accent: 45 212 191;     /* teal — brand */
+  --vector: 129 140 248;    /* indigo — dense/semantic retrieval */
+  --keyword: 45 212 191;    /* teal — lexical/BM25 retrieval */
+  --danger: 248 113 113;
+  --warn: 251 191 36;
+  --ok: 52 211 153;
+  color-scheme: dark;
+}
+
+.light {
+  --canvas: 255 255 255;
+  --panel: 246 248 250;
+  --panel2: 238 241 244;
+  --border: 208 215 222;
+  --text: 31 35 40;
+  --muted: 99 108 118;
+  --faint: 140 149 159;
+  --accent: 13 148 136;
+  --vector: 79 70 229;
+  --keyword: 13 148 136;
+  --danger: 220 38 38;
+  --warn: 180 130 4;
+  --ok: 5 150 105;
+  color-scheme: light;
+}
+
 @layer base {
   body {
-    @apply font-inter antialiased bg-surface text-on-surface;
+    @apply font-inter antialiased bg-canvas text-txt;
   }
+  /* Smooth the theme switch. */
+  body, .theme-tr { transition: background-color .2s ease, color .2s ease, border-color .2s ease; }
 }
 
 .material-symbols-outlined {
@@ -13,7 +53,57 @@
   vertical-align: middle;
 }
 
-.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+/* Thin, theme-aware scrollbars. */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #25252b; border-radius: 10px; }
-.ghost-border { border: 1px solid rgba(71, 71, 78, 0.15); }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(var(--border));
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgb(var(--faint)); }
+
+/* Faux line-number gutter for code snippet previews (IDE motif). */
+.code-gutter {
+  counter-reset: ln;
+}
+.code-gutter > .ln {
+  counter-increment: ln;
+}
+.code-gutter > .ln::before {
+  content: counter(ln);
+  display: inline-block;
+  width: 1.75rem;
+  margin-right: 0.75rem;
+  text-align: right;
+  color: rgb(var(--faint));
+  user-select: none;
+}
+
+/* Lightweight markdown styling (no typography plugin dependency). */
+.md { @apply text-txt; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { @apply my-2 leading-relaxed; }
+.md h1, .md h2, .md h3, .md h4 { @apply font-semibold text-txt mt-4 mb-2 leading-tight; }
+.md h1 { @apply text-base; }
+.md h2 { @apply text-[15px]; }
+.md h3 { @apply text-sm; }
+.md ul { @apply list-disc pl-5 my-2 space-y-1; }
+.md ol { @apply list-decimal pl-5 my-2 space-y-1; }
+.md li { @apply leading-relaxed; }
+.md a { @apply text-accent underline underline-offset-2; }
+.md strong { @apply font-semibold text-txt; }
+.md blockquote { @apply border-l-2 border-line pl-3 text-muted my-2; }
+.md pre { @apply my-2; }
+.md table { @apply w-full my-2 text-[12px] border-collapse; }
+.md th, .md td { @apply border border-line px-2 py-1 text-left; }
+.md hr { @apply border-line my-3; }
+
+/* Subtle grid texture for the empty state. */
+.grid-bg {
+  background-image:
+    linear-gradient(rgb(var(--border) / 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--border) / 0.35) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 30%, transparent 75%);
+}

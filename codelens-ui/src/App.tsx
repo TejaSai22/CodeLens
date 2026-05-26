@@ -1,32 +1,71 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { checkHealth, indexRepository, queryCodebaseStream, listRepos, deleteRepo, RepoInfo } from './api';
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import {
+  checkHealth, indexRepository, queryCodebaseStream, listRepos, deleteRepo,
+  RepoInfo, SourceChunk,
+} from './api';
 
-const statusColor: Record<string, string> = {
-  ready: 'text-emerald-500',
-  indexing: 'text-amber-500',
-  error: 'text-red-500',
+type Theme = 'dark' | 'light';
+
+type ChatMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+  sources?: SourceChunk[];
+  streaming?: boolean;
 };
 
+const EXAMPLE_QUERIES = [
+  'What does this codebase do, at a high level?',
+  'Where is the application entry point?',
+  'How is authentication handled?',
+  'Explain the main data flow.',
+];
+
+const statusMeta: Record<string, { color: string; icon: string }> = {
+  ready: { color: 'text-ok', icon: 'database' },
+  indexing: { color: 'text-warn', icon: 'progress_activity' },
+  error: { color: 'text-danger', icon: 'error' },
+};
+
+const baseName = (p: string) => p.split('/').pop() || p;
+
 export default function App() {
+  const [theme, setTheme] = useState<Theme>(() =>
+    typeof document !== 'undefined' && document.documentElement.classList.contains('light') ? 'light' : 'dark'
+  );
   const [apiOnline, setApiOnline] = useState(false);
   const [inputType, setInputType] = useState<'github' | 'local'>('github');
-  const [repoInput, setRepoInput] = useState("");
+  const [repoInput, setRepoInput] = useState('');
   const [isIndexing, setIsIndexing] = useState(false);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [activeRepoId, setActiveRepoId] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const [isQuerying, setIsQuerying] = useState(false);
   // Conversations are kept per-repo so switching repos preserves each chat.
-  const [chats, setChats] = useState<Record<string, any[]>>({});
+  const [chats, setChats] = useState<Record<string, ChatMessage[]>>({});
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeRepo = repos.find(r => r.repo_id === activeRepoId) || null;
   const messages = activeRepoId ? (chats[activeRepoId] || []) : [];
   const canChat = !!activeRepo && activeRepo.status === 'ready' && apiOnline;
   const anyIndexing = repos.some(r => r.status === 'indexing');
+
+  // Sources of the most recent assistant turn drive the retrieval panel.
+  const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+  const panelSources = lastAssistant?.sources || [];
+
+  const toggleTheme = () => {
+    setTheme(prev => {
+      const next: Theme = prev === 'dark' ? 'light' : 'dark';
+      const root = document.documentElement;
+      root.classList.remove('dark', 'light');
+      root.classList.add(next);
+      try { localStorage.setItem('codelens-theme', next); } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   const refreshRepos = useCallback(async () => {
     const list = await listRepos();
@@ -45,21 +84,24 @@ export default function App() {
       if (online) refreshRepos();
     };
     tick();
-    // Poll faster while a repo is actively indexing so status/progress feels live.
     const interval = setInterval(tick, anyIndexing ? 1500 : 5000);
     return () => clearInterval(interval);
   }, [refreshRepos, anyIndexing]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages.length, isQuerying]);
 
   const handleIndex = async () => {
     if (!repoInput.trim()) return;
     setIsIndexing(true);
     try {
       const res = await indexRepository(repoInput.trim());
-      setRepoInput("");
+      setRepoInput('');
       await refreshRepos();
       setActiveRepoId(res.repo_id);
     } catch (e) {
-      alert("Failed to index: " + (e as Error).message);
+      alert('Failed to index: ' + (e as Error).message);
     } finally {
       setIsIndexing(false);
     }
@@ -67,346 +109,509 @@ export default function App() {
 
   const handleDelete = async (repoId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm("Delete this indexed repository?")) return;
+    if (!confirm('Delete this indexed repository?')) return;
     try {
       await deleteRepo(repoId);
-      setChats(prev => {
-        const next = { ...prev };
-        delete next[repoId];
-        return next;
-      });
+      setChats(prev => { const next = { ...prev }; delete next[repoId]; return next; });
       await refreshRepos();
     } catch (err) {
-      alert("Failed to delete: " + (err as Error).message);
+      alert('Failed to delete: ' + (err as Error).message);
     }
   };
 
-  const handleQuery = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!query.trim() || !canChat || isQuerying || !activeRepoId) return;
+  const runQuery = async (text: string) => {
+    const q = text.trim();
+    if (!q || !canChat || isQuerying || !activeRepoId) return;
 
     const repoId = activeRepoId;
-    const newQuery = query;
-    setQuery("");
+    setQuery('');
     const prevMessages = chats[repoId] || [];
     const contextHistory = prevMessages.slice(-4);
-    const assistantIndex = prevMessages.length + 1; // sits after the new user message
+    const assistantIndex = prevMessages.length + 1;
     setChats(prev => ({
       ...prev,
       [repoId]: [
         ...prevMessages,
-        { role: "user", content: newQuery },
-        { role: "assistant", content: "", sources: [], streaming: true },
+        { role: 'user', content: q },
+        { role: 'assistant', content: '', sources: [], streaming: true },
       ],
     }));
     setIsQuerying(true);
 
-    const updateAssistant = (updater: (m: any) => any) => setChats(prev => {
+    const updateAssistant = (updater: (m: ChatMessage) => ChatMessage) => setChats(prev => {
       const list = [...(prev[repoId] || [])];
       if (list[assistantIndex]) list[assistantIndex] = updater(list[assistantIndex]);
       return { ...prev, [repoId]: list };
     });
 
     try {
-      await queryCodebaseStream(repoId, newQuery, contextHistory, {
+      await queryCodebaseStream(repoId, q, contextHistory, {
         onSources: (sources) => updateAssistant(m => ({ ...m, sources })),
         onToken: (text) => updateAssistant(m => ({ ...m, content: m.content + text })),
       });
       updateAssistant(m => ({ ...m, streaming: false }));
     } catch (err) {
-      updateAssistant(m => ({
-        ...m,
-        streaming: false,
-        content: m.content || ("Error: " + (err as Error).message),
-      }));
+      updateAssistant(m => ({ ...m, streaming: false, content: m.content || ('**Error:** ' + (err as Error).message) }));
     } finally {
       setIsQuerying(false);
     }
   };
 
+  const codeStyle = theme === 'dark' ? oneDark : oneLight;
+  const awaitingSources = isQuerying && panelSources.length === 0;
+
   return (
-    <div className="flex h-screen w-full bg-surface text-on-surface overflow-hidden">
-      {/* SIDEBAR */}
-      <aside className="flex flex-col h-full p-4 gap-y-2 bg-zinc-900/50 dark:bg-zinc-950/50 backdrop-blur-xl w-64 border-r border-zinc-800/20 shadow-[20px_0_50px_rgba(0,0,0,0.3)] font-inter tracking-tight antialiased">
-        <div className="flex items-center gap-3 px-2 mb-6">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-zinc-100 to-zinc-500 flex items-center justify-center text-on-primary">
-            <span className="material-symbols-outlined text-sm">terminal</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-lg font-semibold tracking-tighter text-zinc-100">CodeLens AI</span>
-            <span className="text-[10px] text-zinc-500 uppercase tracking-widest">v1.1.0-multirepo</span>
+    <div className="flex h-screen w-full bg-canvas text-txt overflow-hidden font-inter">
+      {/* ───────────────── SIDEBAR ───────────────── */}
+      <aside className="flex flex-col h-full w-64 shrink-0 bg-panel border-r border-line">
+        <div className="flex items-center gap-2.5 px-4 h-14 border-b border-line">
+          <Logo />
+          <div className="flex flex-col leading-none">
+            <span className="text-[15px] font-semibold tracking-tight">
+              code<span className="text-accent">lens</span>
+            </span>
+            <span className="text-[9px] font-mono text-faint tracking-widest uppercase mt-0.5">hybrid code RAG</span>
           </div>
         </div>
 
-        <div className="bg-surface-container-low p-1 rounded-lg flex gap-1 mb-4 ghost-border">
-          <button
-            onClick={() => setInputType('github')}
-            className={`flex-1 text-[11px] font-medium py-1.5 rounded transition-colors ${inputType === 'github' ? 'bg-zinc-800/50 text-zinc-100 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >GitHub URL</button>
-          <button
-            onClick={() => setInputType('local')}
-            className={`flex-1 text-[11px] font-medium py-1.5 rounded transition-colors ${inputType === 'local' ? 'bg-zinc-800/50 text-zinc-100 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >Local Path</button>
-        </div>
+        <div className="p-3 space-y-3">
+          <div className="bg-canvas border border-line p-0.5 rounded-md flex gap-0.5">
+            {(['github', 'local'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setInputType(t)}
+                className={`flex-1 text-[11px] font-medium py-1.5 rounded transition-colors ${
+                  inputType === t ? 'bg-panel2 text-txt shadow-sm' : 'text-muted hover:text-txt'
+                }`}
+              >{t === 'github' ? 'GitHub URL' : 'Local Path'}</button>
+            ))}
+          </div>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] text-on-surface-variant font-medium ml-1">
-              {inputType === 'github' ? 'REPOSITORY URL' : 'LOCAL PATH'}
-            </label>
+          <div className="relative">
             <input
-              className="w-full bg-zinc-900 border-none ring-1 ring-zinc-800/50 focus:ring-zinc-600 rounded-lg py-2 px-3 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition-all"
-              placeholder={inputType === 'github' ? "https://github.com/..." : "/path/to/repo"}
+              className="w-full bg-canvas border border-line focus:border-accent rounded-md py-2 pl-3 pr-3 text-[13px] font-mono text-txt placeholder-faint outline-none transition-colors"
+              placeholder={inputType === 'github' ? 'github.com/owner/repo' : '/path/to/repo'}
               value={repoInput}
               onChange={e => setRepoInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleIndex(); }}
-              type="text"
             />
           </div>
+
           <button
             onClick={handleIndex}
-            disabled={isIndexing || !apiOnline}
-            className={`w-full mt-2 bg-gradient-to-br from-zinc-100 to-zinc-400 text-zinc-950 font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all duration-200 shadow-lg ${(isIndexing || !apiOnline) ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90 active:scale-95'}`}
+            disabled={isIndexing || !apiOnline || !repoInput.trim()}
+            className="w-full bg-accent text-canvas font-semibold text-[13px] py-2 rounded-md flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {isIndexing ? <span className="material-symbols-outlined text-base animate-spin">progress_activity</span> : null}
-            {isIndexing ? 'Indexing...' : 'Index Repository'}
+            <span className={`material-symbols-outlined text-[18px] ${isIndexing ? 'animate-spin' : ''}`}>
+              {isIndexing ? 'progress_activity' : 'add'}
+            </span>
+            {isIndexing ? 'Indexing…' : 'Index Repository'}
           </button>
         </div>
 
-        {/* INDEXED REPOS */}
-        <div className="mt-6 flex flex-col gap-2 flex-1 min-h-0">
-          <div className="flex items-center gap-2 px-1">
-            <span className="material-symbols-outlined text-sm text-zinc-500">folder_open</span>
-            <span className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase">Indexed Repos</span>
-            <span className="ml-auto text-[10px] font-mono text-zinc-600">{repos.length}</span>
+        {/* Indexed repos */}
+        <div className="flex flex-col flex-1 min-h-0 px-3">
+          <div className="flex items-center gap-1.5 px-1 py-2">
+            <span className="text-[10px] font-semibold text-faint tracking-widest uppercase">Repositories</span>
+            <span className="ml-auto text-[10px] font-mono text-faint bg-canvas border border-line rounded px-1.5">{repos.length}</span>
           </div>
-          <div className="flex flex-col gap-1 overflow-y-auto custom-scrollbar pr-1">
+          <div className="flex flex-col gap-0.5 overflow-y-auto custom-scrollbar pb-2">
             {repos.length === 0 && (
-              <p className="text-[11px] text-zinc-600 italic px-2 py-3">No repositories indexed yet.</p>
+              <p className="text-[11px] text-faint px-2 py-6 text-center leading-relaxed">
+                No repositories yet.<br />Index one to begin.
+              </p>
             )}
-            {repos.map(repo => (
-              <div
-                key={repo.repo_id}
-                onClick={() => setActiveRepoId(repo.repo_id)}
-                className={`group rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer transition-all ${repo.repo_id === activeRepoId ? 'bg-zinc-800/50 text-zinc-100 shadow-inner' : 'text-zinc-400 hover:bg-zinc-800/30'}`}
-              >
-                <span className={`material-symbols-outlined text-sm ${statusColor[repo.status] || 'text-zinc-500'}`}>
-                  {repo.status === 'indexing' ? 'progress_activity' : repo.status === 'error' ? 'error' : 'database'}
-                </span>
-                <div className="flex flex-col min-w-0 flex-1">
-                  <span className="text-xs font-medium truncate">{repo.display_name}</span>
-                  <span className={`text-[9px] font-mono truncate ${repo.status === 'error' ? 'text-red-500' : repo.status === 'indexing' ? 'text-amber-500' : 'text-zinc-600'}`}>
-                    {repo.status === 'indexing'
-                      ? (repo.progress || 'indexing...')
-                      : repo.status === 'error'
-                        ? (repo.error || 'failed')
-                        : `${repo.chunks_created} chunks`}
-                  </span>
-                </div>
-                <button
-                  onClick={e => handleDelete(repo.repo_id, e)}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-500 transition-all"
-                  title="Delete repository"
+            {repos.map(repo => {
+              const meta = statusMeta[repo.status] || statusMeta.ready;
+              const active = repo.repo_id === activeRepoId;
+              return (
+                <div
+                  key={repo.repo_id}
+                  onClick={() => setActiveRepoId(repo.repo_id)}
+                  className={`group rounded-md px-2.5 py-2 flex items-center gap-2 cursor-pointer border transition-colors ${
+                    active ? 'bg-panel2 border-line' : 'border-transparent hover:bg-panel2/60'
+                  }`}
                 >
-                  <span className="material-symbols-outlined text-sm">delete</span>
-                </button>
-              </div>
-            ))}
+                  <span className={`material-symbols-outlined text-[16px] ${meta.color} ${repo.status === 'indexing' ? 'animate-spin' : ''}`}>
+                    {meta.icon}
+                  </span>
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="text-[12px] font-medium truncate">{repo.display_name}</span>
+                    <span className={`text-[10px] font-mono truncate ${
+                      repo.status === 'error' ? 'text-danger' : repo.status === 'indexing' ? 'text-warn' : 'text-faint'
+                    }`}>
+                      {repo.status === 'indexing'
+                        ? (repo.progress || 'indexing…')
+                        : repo.status === 'error'
+                          ? (repo.error || 'failed')
+                          : `${repo.chunks_created.toLocaleString()} chunks`}
+                    </span>
+                  </div>
+                  <button
+                    onClick={e => handleDelete(repo.repo_id, e)}
+                    className="opacity-0 group-hover:opacity-100 text-faint hover:text-danger transition-all"
+                    title="Delete repository"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">delete</span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="mt-auto pt-4 flex flex-col gap-2">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-900/40 ghost-border">
-            <div className={`w-2 h-2 rounded-full ${apiOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'}`}></div>
-            <span className={`text-xs font-medium ${apiOnline ? 'text-emerald-500' : 'text-red-500'}`}>API {apiOnline ? 'Online' : 'Offline'}</span>
-            <span className="ml-auto material-symbols-outlined text-sm text-zinc-600">check_circle</span>
+        {/* Footer: status + theme */}
+        <div className="px-3 py-3 border-t border-line flex items-center gap-2">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <span className={`w-1.5 h-1.5 rounded-full ${apiOnline ? 'bg-ok' : 'bg-danger'} ${apiOnline ? 'shadow-[0_0_6px_rgb(var(--ok))]' : ''}`} />
+            <span className={`text-[11px] font-mono ${apiOnline ? 'text-muted' : 'text-danger'}`}>
+              api {apiOnline ? 'online' : 'offline'}
+            </span>
           </div>
+          <button
+            onClick={toggleTheme}
+            className="text-faint hover:text-txt transition-colors p-1 rounded hover:bg-panel2"
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            <span className="material-symbols-outlined text-[18px]">{theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
+          </button>
         </div>
       </aside>
 
-      {/* MAIN CHAT AREA */}
-      <main className="flex-1 flex flex-col relative bg-surface">
-        <header className="flex justify-between items-center h-14 px-6 w-full sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800/20">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold tracking-tighter bg-gradient-to-br from-zinc-100 to-zinc-500 bg-clip-text text-transparent">CodeLens</h1>
-            {activeRepo && (
-              <span className="text-xs font-mono text-zinc-500 flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-sm">database</span>
-                {activeRepo.display_name}
-              </span>
-            )}
-          </div>
-        </header>
-
-        <section className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 max-w-4xl mx-auto w-full pb-32">
-          {messages.length === 0 ? (
-            <div className="text-center py-12 space-y-4">
-              <h2 className="text-4xl font-semibold tracking-tighter text-zinc-100">Architecting Insight.</h2>
-              <p className="text-on-surface-variant max-w-md mx-auto">
-                {activeRepo
-                  ? `Querying ${activeRepo.display_name}. Ask anything about the codebase.`
-                  : 'Index a repository, then select it from the sidebar to start semantic codebase analysis.'}
-              </p>
+      {/* ───────────────── MAIN ───────────────── */}
+      <main className="flex-1 flex flex-col min-w-0 relative">
+        <header className="flex items-center h-14 px-5 border-b border-line shrink-0 gap-3">
+          <span className="material-symbols-outlined text-[18px] text-faint">terminal</span>
+          {activeRepo ? (
+            <div className="flex items-center gap-2 font-mono text-[13px] min-w-0">
+              <span className="text-muted shrink-0">repo</span>
+              <span className="text-faint">/</span>
+              <span className="text-txt truncate">{activeRepo.display_name}</span>
             </div>
           ) : (
-            messages.map((msg, idx) => (
-              <div key={idx} className={`flex gap-4 animate-in fade-in duration-500 ${msg.role === 'user' ? 'justify-end slide-in-from-right-4' : 'justify-start slide-in-from-left-4'}`}>
-                {msg.role === 'assistant' && (
-                  <div className="w-8 h-8 rounded-lg bg-zinc-900 ghost-border flex items-center justify-center shrink-0">
-                    <span className="material-symbols-outlined text-lg text-zinc-400">auto_awesome</span>
-                  </div>
-                )}
-
-                <div className={`space-y-4 ${msg.role === 'user' ? 'max-w-[80%]' : 'flex-1'}`}>
-                  <div className={`${msg.role === 'user' ? 'bg-zinc-800/50 px-4 py-3 rounded-2xl rounded-tr-sm ghost-border shadow-lg' : 'bg-zinc-950 px-5 py-4 rounded-2xl rounded-tl-sm ghost-border shadow-xl'}`}>
-                    {msg.role === 'user' ? (
-                      <p className="text-sm leading-relaxed text-zinc-100 font-medium">{msg.content}</p>
-                    ) : (!msg.content && msg.streaming) ? (
-                      <div className="flex items-center gap-2 py-1">
-                        <div className="w-1.5 h-1.5 rounded-full bg-zinc-600 animate-bounce [animation-delay:-0.3s]"></div>
-                        <div className="w-1.5 h-1.5 rounded-full bg-zinc-600 animate-bounce [animation-delay:-0.15s]"></div>
-                        <div className="w-1.5 h-1.5 rounded-full bg-zinc-600 animate-bounce"></div>
-                        <span className="text-xs text-zinc-500 ml-1 italic">Thinking...</span>
-                      </div>
-                    ) : (
-                      <article className="prose prose-invert max-w-none text-sm text-on-surface leading-relaxed overflow-x-auto">
-                        <ReactMarkdown
-                          rehypePlugins={[rehypeRaw]}
-                          components={{
-                            code({node, inline, className, children, ...props}: any) {
-                              const match = /language-(\w+)/.exec(className || '')
-                              return !inline && match ? (
-                                <SyntaxHighlighter
-                                  style={vscDarkPlus as any}
-                                  language={match[1]}
-                                  PreTag="div"
-                                  className="rounded-lg !bg-surface-container-low !p-4 !m-0 !text-xs !ghost-border"
-                                  {...props}
-                                >
-                                  {String(children).replace(/\n$/, '')}
-                                </SyntaxHighlighter>
-                              ) : (
-                                <code className="bg-zinc-800/60 px-1 py-0.5 rounded" {...props}>
-                                  {children}
-                                </code>
-                              )
-                            },
-                            think({children}: any) {
-                              return (
-                                <details className="mb-4 bg-zinc-900/50 border border-zinc-800/50 rounded-lg overflow-hidden group">
-                                  <summary className="flex items-center gap-2 px-4 py-2 bg-zinc-800/30 cursor-pointer text-xs font-semibold text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-all select-none list-none [&::-webkit-details-marker]:hidden">
-                                    <span className="material-symbols-outlined text-[14px] group-open:-rotate-180 transition-transform duration-300">expand_more</span>
-                                    <span className="material-symbols-outlined text-[14px]">psychology</span>
-                                    AI Thought Process
-                                  </summary>
-                                  <div className="p-4 text-xs text-zinc-500 border-t border-zinc-800/50 italic bg-zinc-950/30 leading-relaxed font-mono">
-                                    {children}
-                                  </div>
-                                </details>
-                              )
-                            }
-                          } as any}
-                        >
-                          {msg.content}
-                        </ReactMarkdown>
-                      </article>
-                    )}
-                  </div>
-
-                  {/* Sources Accordion */}
-                  {msg.sources && msg.sources.length > 0 && (
-                    <div className="space-y-2 mt-4">
-                      <div className="flex items-center gap-2 px-1">
-                        <span className="material-symbols-outlined text-xs text-zinc-500">link</span>
-                        <span className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase">Verified Sources</span>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {msg.sources.map((src: any, i: number) => (
-                          <div key={i} className="bg-surface-container-low p-3 rounded-xl ghost-border hover:bg-zinc-800/30 transition-all group">
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="material-symbols-outlined text-sm text-zinc-500">description</span>
-                                <span className="text-[11px] font-mono text-zinc-300 truncate">{src.file_path}</span>
-                              </div>
-                              <span className="text-[10px] px-1.5 py-0.5 bg-emerald-500/10 text-emerald-500 rounded font-bold shrink-0 ml-2">{Math.round((src.similarity || 0) * 100)}% Match</span>
-                            </div>
-                            {(src.start_line || src.end_line) ? (
-                              <p className="text-[9px] text-zinc-600 font-mono mb-1">lines {src.start_line}-{src.end_line}</p>
-                            ) : null}
-                            <div className="h-[1px] bg-zinc-800/50 w-full mb-2"></div>
-                            <p className="text-[10px] text-zinc-500 line-clamp-2 italic">{src.content?.substring(0, 100)}...</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))
+            <span className="font-mono text-[13px] text-faint">no repository selected</span>
           )}
-        </section>
+          {activeRepo && (
+            <span className={`ml-auto text-[11px] font-mono ${statusMeta[activeRepo.status]?.color}`}>
+              ● {activeRepo.status}
+            </span>
+          )}
+        </header>
 
-        <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-surface via-surface to-transparent">
-          <div className="max-w-4xl mx-auto">
-            <div className="relative group">
-              <form onSubmit={handleQuery} className="flex items-center gap-3 bg-surface-container-highest/80 backdrop-blur-xl px-4 py-3 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] ghost-border focus-within:ring-1 ring-zinc-700 transition-all">
-                <span className="material-symbols-outlined text-zinc-500 group-focus-within:text-zinc-300">search</span>
-                <input
-                  className="flex-1 bg-transparent border-none focus:ring-0 text-sm text-zinc-100 placeholder-zinc-600 outline-none"
-                  placeholder={canChat ? "Ask anything about your codebase..." : "Select an indexed repository to start..."}
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  disabled={!canChat || isQuerying}
-                  type="text"
-                />
-                <button type="submit" disabled={!canChat || isQuerying || !query.trim()} className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center hover:bg-zinc-200 active:scale-95 transition-all group/btn disabled:opacity-50">
-                  <span className="material-symbols-outlined text-zinc-900 text-sm group-hover/btn:translate-x-0.5 transition-transform">send</span>
-                </button>
-              </form>
-              {!activeRepo && (
-                <div className="hidden absolute -top-8 left-0 right-0 text-center md:block">
-                  <span className="text-[10px] font-bold text-zinc-600 tracking-tighter uppercase bg-zinc-950 px-3 py-1 rounded-full border border-zinc-800/50">
-                    Index and select a repository to unlock chat
-                  </span>
-                </div>
-              )}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar">
+          {messages.length === 0 ? (
+            <EmptyState
+              activeRepo={activeRepo}
+              canChat={canChat}
+              onExample={(q) => runQuery(q)}
+            />
+          ) : (
+            <div className="max-w-3xl mx-auto w-full px-5 py-6 space-y-6 pb-40">
+              {messages.map((msg, idx) => (
+                <MessageBubble key={idx} msg={msg} codeStyle={codeStyle} />
+              ))}
             </div>
-          </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <div className="absolute bottom-0 left-0 right-0 px-5 pb-5 pt-10 bg-gradient-to-t from-canvas via-canvas to-transparent pointer-events-none">
+          <form
+            onSubmit={(e) => { e.preventDefault(); runQuery(query); }}
+            className="max-w-3xl mx-auto pointer-events-auto flex items-center gap-2.5 bg-panel border border-line focus-within:border-accent rounded-lg px-3.5 py-2.5 transition-colors shadow-lg"
+          >
+            <span className="text-accent font-mono text-sm select-none">{'>'}</span>
+            <input
+              className="flex-1 bg-transparent text-[14px] text-txt placeholder-faint outline-none font-mono"
+              placeholder={canChat ? 'Ask anything about this codebase…' : 'Select a ready repository to start…'}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              disabled={!canChat || isQuerying}
+            />
+            <button
+              type="submit"
+              disabled={!canChat || isQuerying || !query.trim()}
+              className="w-8 h-8 rounded-md bg-accent text-canvas flex items-center justify-center hover:opacity-90 active:scale-95 transition-all disabled:opacity-40"
+            >
+              <span className={`material-symbols-outlined text-[18px] ${isQuerying ? 'animate-spin' : ''}`}>
+                {isQuerying ? 'progress_activity' : 'arrow_upward'}
+              </span>
+            </button>
+          </form>
         </div>
       </main>
 
-      {/* UTILITY PANEL */}
-      <aside className="w-72 border-l border-zinc-800/20 bg-surface-container-low hidden lg:flex flex-col p-4">
-        <div className="space-y-6">
-          <div className="space-y-4">
-            <h3 className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase">
-              {activeRepo ? 'Active Repo' : 'Project Metrics'}
-            </h3>
-            {activeRepo ? (
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-zinc-400">Repository</span>
-                  <span className="text-xs font-mono font-bold text-zinc-200 truncate ml-2">{activeRepo.display_name}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-zinc-400">Status</span>
-                  <span className={`text-xs font-mono font-bold ${statusColor[activeRepo.status] || 'text-zinc-200'}`}>{activeRepo.status}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-zinc-400">Files Indexed</span>
-                  <span className="text-xs font-mono font-bold text-zinc-200">{activeRepo.files_indexed}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-zinc-400">Chunks Created</span>
-                  <span className="text-xs font-mono font-bold text-zinc-200">{activeRepo.chunks_created}</span>
-                </div>
+      {/* ───────────────── RETRIEVAL PANEL ───────────────── */}
+      <aside className="w-80 shrink-0 border-l border-line bg-panel hidden lg:flex flex-col">
+        <div className="flex items-center gap-2 h-14 px-5 border-b border-line shrink-0">
+          <span className="material-symbols-outlined text-[18px] text-accent">manage_search</span>
+          <span className="text-[13px] font-semibold">Retrieval</span>
+          {panelSources.length > 0 && (
+            <span className="ml-auto text-[10px] font-mono text-faint bg-canvas border border-line rounded px-1.5">
+              {panelSources.length} chunks
+            </span>
+          )}
+        </div>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
+          <RetrievalLegend />
+          {activeRepo && (
+            <div className="grid grid-cols-2 gap-2">
+              <Stat label="files" value={activeRepo.files_indexed.toLocaleString()} />
+              <Stat label="chunks" value={activeRepo.chunks_created.toLocaleString()} />
+            </div>
+          )}
+
+          {awaitingSources ? (
+            <ScanSkeleton />
+          ) : panelSources.length > 0 ? (
+            <div className="space-y-2.5">
+              <div className="text-[10px] font-semibold text-faint tracking-widest uppercase pt-1">
+                Why these chunks
               </div>
-            ) : (
-              <p className="text-[11px] text-zinc-600 italic">No repository selected.</p>
-            )}
-          </div>
+              {panelSources.map((src, i) => (
+                <SourceCard key={i} src={src} maxRrf={Math.max(...panelSources.map(s => s.retrieval?.rrf_score || 0))} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-faint leading-relaxed pt-2">
+              Ask a question and CodeLens will show exactly which code chunks it retrieved —
+              and whether each came from <span className="text-vector">semantic</span> or{' '}
+              <span className="text-keyword">keyword</span> search.
+            </p>
+          )}
         </div>
       </aside>
+    </div>
+  );
+}
+
+/* ─────────────────────── sub-components ─────────────────────── */
+
+function Logo() {
+  return (
+    <div className="relative w-7 h-7 shrink-0">
+      <div className="absolute inset-0 rounded-md border-2 border-accent" />
+      <div className="absolute inset-[5px] rounded-full border border-accent/60" />
+      <div className="absolute inset-[10px] rounded-full bg-accent" />
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-canvas border border-line rounded-md px-3 py-2">
+      <div className="text-[16px] font-mono font-semibold text-txt leading-none">{value}</div>
+      <div className="text-[10px] text-faint uppercase tracking-wider mt-1">{label}</div>
+    </div>
+  );
+}
+
+function RetrievalLegend() {
+  return (
+    <div className="bg-canvas border border-line rounded-md p-3 space-y-2">
+      <div className="text-[10px] font-semibold text-faint tracking-widest uppercase">Hybrid retrieval</div>
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="w-2 h-2 rounded-sm bg-vector shrink-0" />
+        <span className="text-muted"><span className="text-vector font-medium">vector</span> — semantic / embedding match</span>
+      </div>
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="w-2 h-2 rounded-sm bg-keyword shrink-0" />
+        <span className="text-muted"><span className="text-keyword font-medium">keyword</span> — exact BM25 lexical match</span>
+      </div>
+      <div className="text-[10px] text-faint leading-relaxed pt-1 border-t border-line">
+        Results are fused with Reciprocal Rank Fusion (RRF).
+      </div>
+    </div>
+  );
+}
+
+function ScanSkeleton() {
+  return (
+    <div className="space-y-2.5 pt-1">
+      <div className="text-[10px] font-semibold text-faint tracking-widest uppercase">Retrieving…</div>
+      {[0, 1, 2].map(i => (
+        <div key={i} className="relative overflow-hidden bg-canvas border border-line rounded-md h-16 p-3">
+          <div className="absolute left-0 right-0 h-8 bg-gradient-to-b from-accent/20 to-transparent animate-scan" />
+          <div className="h-2 w-2/3 rounded bg-line mb-2" />
+          <div className="h-2 w-1/3 rounded bg-line" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MatchBadge({ kind }: { kind: string }) {
+  const isVector = kind === 'vector';
+  return (
+    <span className={`inline-flex items-center gap-1 text-[9px] font-mono font-medium px-1.5 py-0.5 rounded border ${
+      isVector ? 'text-vector border-vector/30 bg-vector/10' : 'text-keyword border-keyword/30 bg-keyword/10'
+    }`}>
+      <span className="material-symbols-outlined text-[11px]">{isVector ? 'hub' : 'tag'}</span>
+      {kind}
+    </span>
+  );
+}
+
+function SourceCard({ src, maxRrf }: { src: SourceChunk; maxRrf: number }) {
+  const r = src.retrieval;
+  const matched = r?.matched_by || [];
+  const pct = r && maxRrf > 0 ? Math.round((r.rrf_score / maxRrf) * 100) : 0;
+  const snippet = (src.content || '').split('\n').slice(0, 3);
+
+  return (
+    <div className="bg-canvas border border-line rounded-md overflow-hidden animate-fade-up">
+      <div className="px-3 pt-2.5 pb-2 space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-faint shrink-0">#{(r?.rank ?? 0) + 1}</span>
+          <span className="material-symbols-outlined text-[14px] text-faint shrink-0">description</span>
+          <span className="text-[11px] font-mono text-txt truncate" title={src.file_path}>{baseName(src.file_path)}</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1">
+          {matched.map(m => <MatchBadge key={m} kind={m} />)}
+          {src.chunk_type && (
+            <span className="text-[9px] font-mono text-muted bg-panel2 border border-line rounded px-1.5 py-0.5">{src.chunk_type}</span>
+          )}
+          {src.language && (
+            <span className="text-[9px] font-mono text-faint">{src.language}</span>
+          )}
+          {(src.start_line || src.end_line) ? (
+            <span className="ml-auto text-[9px] font-mono text-faint">L{src.start_line}–{src.end_line}</span>
+          ) : null}
+        </div>
+
+        {/* Score breakdown */}
+        <div className="flex items-center gap-2 text-[9px] font-mono text-faint">
+          <div className="flex-1 h-1 rounded-full bg-panel2 overflow-hidden">
+            <div className="h-full bg-accent origin-left animate-bar-grow" style={{ transform: `scaleX(${Math.max(0.04, pct / 100)})` }} />
+          </div>
+          <span title="Reciprocal Rank Fusion score">rrf {r?.rrf_score?.toFixed(4) ?? '—'}</span>
+          {r?.bm25_score != null && <span className="text-keyword" title="BM25 lexical score">bm25 {r.bm25_score.toFixed(2)}</span>}
+          {r?.dense_rank != null && <span className="text-vector" title="Rank in vector results">v#{r.dense_rank + 1}</span>}
+        </div>
+      </div>
+
+      {snippet.length > 0 && (
+        <div className="border-t border-line bg-panel px-3 py-2 code-gutter font-mono text-[10px] text-muted leading-relaxed overflow-x-auto">
+          {snippet.map((ln, i) => (
+            <div key={i} className="ln whitespace-pre">{ln || ' '}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageBubble({ msg, codeStyle }: { msg: ChatMessage; codeStyle: any }) {
+  const isUser = msg.role === 'user';
+  return (
+    <div className={`flex gap-3 animate-fade-up ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {!isUser && (
+        <div className="w-7 h-7 rounded-md bg-panel border border-line flex items-center justify-center shrink-0 mt-0.5">
+          <span className="material-symbols-outlined text-[16px] text-accent">auto_awesome</span>
+        </div>
+      )}
+      <div className={isUser ? 'max-w-[80%]' : 'flex-1 min-w-0'}>
+        <div className={isUser
+          ? 'bg-panel2 border border-line px-3.5 py-2.5 rounded-lg rounded-tr-sm'
+          : 'bg-panel border border-line px-4 py-3 rounded-lg rounded-tl-sm'}>
+          {isUser ? (
+            <p className="text-[13px] leading-relaxed text-txt font-mono">{msg.content}</p>
+          ) : (!msg.content && msg.streaming) ? (
+            <div className="flex items-center gap-1.5 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce [animation-delay:-0.3s]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce [animation-delay:-0.15s]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" />
+              <span className="text-[12px] text-faint ml-1 font-mono">analyzing…</span>
+            </div>
+          ) : (
+            <article className="md max-w-none text-[13px] leading-relaxed">
+              <ReactMarkdown
+                components={{
+                  code({ inline, className, children, ...props }: any) {
+                    const match = /language-(\w+)/.exec(className || '');
+                    return !inline && match ? (
+                      <SyntaxHighlighter
+                        style={codeStyle}
+                        language={match[1]}
+                        PreTag="div"
+                        customStyle={{ borderRadius: '0.5rem', fontSize: '12px', margin: 0, background: 'rgb(var(--canvas))' }}
+                        {...props}
+                      >
+                        {String(children).replace(/\n$/, '')}
+                      </SyntaxHighlighter>
+                    ) : (
+                      <code className="bg-panel2 border border-line px-1 py-0.5 rounded text-[12px] font-mono" {...props}>
+                        {children}
+                      </code>
+                    );
+                  },
+                }}
+              >
+                {msg.content}
+              </ReactMarkdown>
+              {msg.streaming && <span className="inline-block w-1.5 h-3.5 bg-accent ml-0.5 animate-blink align-middle" />}
+            </article>
+          )}
+        </div>
+
+        {/* Compact citation strip */}
+        {!isUser && msg.sources && msg.sources.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2 pl-1">
+            {msg.sources.slice(0, 6).map((src, i) => (
+              <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono text-muted bg-panel border border-line rounded px-1.5 py-0.5">
+                <span className="material-symbols-outlined text-[11px] text-faint">description</span>
+                {baseName(src.file_path)}
+                {(src.retrieval?.matched_by || []).map(m => (
+                  <span key={m} className={`w-1.5 h-1.5 rounded-full ${m === 'vector' ? 'bg-vector' : 'bg-keyword'}`} />
+                ))}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ activeRepo, canChat, onExample }: {
+  activeRepo: RepoInfo | null;
+  canChat: boolean;
+  onExample: (q: string) => void;
+}) {
+  return (
+    <div className="relative h-full flex flex-col items-center justify-center px-6 text-center">
+      <div className="absolute inset-0 grid-bg pointer-events-none" />
+      <div className="relative z-10 max-w-md space-y-5">
+        <div className="flex justify-center"><Logo /></div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-semibold tracking-tight">
+            Ask your codebase anything.
+          </h2>
+          <p className="text-[13px] text-muted leading-relaxed">
+            {activeRepo
+              ? <>Querying <span className="font-mono text-txt">{activeRepo.display_name}</span> with hybrid semantic + keyword retrieval. Every answer is grounded in real code and shows its sources.</>
+              : 'Index a repository from the sidebar, then select it to start a grounded conversation about the code.'}
+          </p>
+        </div>
+
+        {canChat && (
+          <div className="grid grid-cols-1 gap-2 pt-2">
+            {EXAMPLE_QUERIES.map(q => (
+              <button
+                key={q}
+                onClick={() => onExample(q)}
+                className="group text-left text-[13px] font-mono text-muted hover:text-txt bg-panel border border-line hover:border-accent rounded-md px-3 py-2 transition-colors flex items-center gap-2"
+              >
+                <span className="text-accent select-none">{'>'}</span>
+                <span className="flex-1">{q}</span>
+                <span className="material-symbols-outlined text-[15px] text-faint opacity-0 group-hover:opacity-100 transition-opacity">arrow_forward</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

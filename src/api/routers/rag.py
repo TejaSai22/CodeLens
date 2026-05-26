@@ -129,6 +129,8 @@ def _retrieve_for_query(request: QueryRequest):
             chunk_type=chunk["metadata"].get("chunk_type", "code"),
             name=chunk["metadata"].get("name", ""),
             content=chunk["content"],
+            language=chunk["metadata"].get("language", ""),
+            retrieval=chunk.get("retrieval"),
         )
         for chunk in retrieved_chunks
     ]

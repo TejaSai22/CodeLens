@@ -141,6 +141,12 @@ class VectorStore:
         if not ids:
             return
 
+        # Load the existing BM25 corpus BEFORE adding to the collection. If we
+        # loaded afterwards, a cold load (no pickle yet) would re-read the
+        # just-added docs from the collection and the append loop below would
+        # then add them a second time, double-counting every chunk on first index.
+        self._ensure_bm25_loaded()
+
         self.collection.add(
             ids=ids,
             documents=documents,
@@ -150,7 +156,6 @@ class VectorStore:
 
         # Append to the BM25 corpus incrementally (avoids re-reading the whole
         # collection) and invalidate the model so it rebuilds on next query.
-        self._ensure_bm25_loaded()
         for cid, document in zip(ids, documents):
             self._bm25_ids.append(cid)
             self._bm25_corpus.append(self._tokenize(document))
@@ -252,30 +257,48 @@ class VectorStore:
                     if len(sparse_results) >= n_results:
                         break
                     
-        # RRF Fusion
+        # RRF Fusion. We also retain per-retriever provenance (which retriever
+        # matched each chunk, its dense rank, its raw BM25 score) so the API can
+        # explain *why* a chunk surfaced rather than only a single fused number.
         rrf_scores = {}
         chunks_map = {}
+        dense_rank_by_id = {}
+        bm25_by_id = {}
         k = 60
-        
+
         for rank, res in enumerate(dense_results):
             cid = res['id']
             chunks_map[cid] = res
             rrf_scores[cid] = 1.0 / (k + rank + 1)
-            
+            dense_rank_by_id[cid] = rank  # 0-based rank in the dense results
+
         for rank, res in enumerate(sparse_results):
             cid = res['id']
             if cid not in chunks_map:
                 chunks_map[cid] = res
             rrf_scores[cid] = rrf_scores.get(cid, 0) + 1.0 / (k + rank + 1)
-            
+            bm25_by_id[cid] = res.get('bm25_score')
+
         sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
-        
+
         final_results = []
-        for cid in sorted_ids[:n_results]:
+        for fused_rank, cid in enumerate(sorted_ids[:n_results]):
             chunk = dict(chunks_map[cid])
-            chunk['similarity'] = rrf_scores[cid]
+            chunk['similarity'] = rrf_scores[cid]  # kept for backward compatibility
+            matched_by = []
+            if cid in dense_rank_by_id:
+                matched_by.append('vector')
+            if cid in bm25_by_id:
+                matched_by.append('keyword')
+            chunk['retrieval'] = {
+                'matched_by': matched_by,                 # ['vector'], ['keyword'], or both
+                'dense_rank': dense_rank_by_id.get(cid),  # 0-based; None if keyword-only
+                'bm25_score': bm25_by_id.get(cid),        # None if vector-only
+                'rrf_score': rrf_scores[cid],             # fused score (also in 'similarity')
+                'rank': fused_rank,                       # final fused rank, 0-based
+            }
             final_results.append(chunk)
-            
+
         return final_results
 
     def clear(self):

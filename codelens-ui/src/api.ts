@@ -22,6 +22,27 @@ export interface RepoInfo {
   updated_at: string;
 }
 
+// Explains *why* a chunk was retrieved — drives the "show your work" panel.
+export interface RetrievalInfo {
+  matched_by: string[];        // subset of ["vector", "keyword"]
+  dense_rank: number | null;   // 0-based rank in vector results; null if keyword-only
+  bm25_score: number | null;   // raw BM25 score; null if vector-only
+  rrf_score: number;           // fused reciprocal-rank-fusion score
+  rank: number;                // 0-based final fused rank
+}
+
+export interface SourceChunk {
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  similarity: number;
+  chunk_type: string;
+  name: string;
+  content: string;
+  language?: string | null;
+  retrieval?: RetrievalInfo | null;
+}
+
 export const checkHealth = async () => {
   try {
     const response = await fetch(`${API_BASE}/health`);
@@ -79,7 +100,7 @@ export const queryCodebase = async (repoId: string, query: string, history: any[
 };
 
 export interface StreamCallbacks {
-  onSources?: (sources: any[]) => void;
+  onSources?: (sources: SourceChunk[]) => void;
   onToken?: (text: string) => void;
 }
 
