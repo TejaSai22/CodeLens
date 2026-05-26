@@ -1,0 +1,38 @@
+# Environment
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data (runtime state: vector store + repo registry)
+data/
+
+# Logs
+logs/
+
+# Node / frontend
+node_modules/
+
+# Testing
+.pytest_cache/
+.pytest_cache
+.benchmarks/
+
+# Temp
+*.tmp
+temp_repos/
+
+# IDE
+.vscode/
+.idea/
+
+# Local tooling
+.agent/
+
+# Local Claude settings
+.claude/settings.local.json
+
+# Frontend build output
+codelens-ui/dist/

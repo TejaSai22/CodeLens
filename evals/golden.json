@@ -1,0 +1,42 @@
+[
+  {
+    "question": "How is hybrid dense and sparse search fused together?",
+    "expected_files": ["retrieval/vector_store.py"]
+  },
+  {
+    "question": "Where are indexed repositories tracked along with their status?",
+    "expected_files": ["retrieval/repo_registry.py"]
+  },
+  {
+    "question": "How does the system stream an answer token by token from the LLM?",
+    "expected_files": ["generation/llm_client.py"]
+  },
+  {
+    "question": "How are Python source files split into chunks by function and class?",
+    "expected_files": ["ingestion/chunker.py"]
+  },
+  {
+    "question": "Where is a GitHub repository cloned to a temporary directory?",
+    "expected_files": ["ingestion/repo_loader.py"]
+  },
+  {
+    "question": "How are text embeddings generated from code?",
+    "expected_files": ["ingestion/embedder.py"]
+  },
+  {
+    "question": "Which endpoints handle indexing a repository and querying it?",
+    "expected_files": ["api/routers/rag.py"]
+  },
+  {
+    "question": "Where is CORS configured for the API?",
+    "expected_files": ["api/main.py"]
+  },
+  {
+    "question": "What are the request and response schemas for the API?",
+    "expected_files": ["api/schemas.py"]
+  },
+  {
+    "question": "How is a separate vector store kept for each repository?",
+    "expected_files": ["retrieval/vector_store_manager.py"]
+  }
+]

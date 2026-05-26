@@ -1,0 +1,41 @@
+# Kept in sync with pyproject.toml. Prefer `uv sync` for local dev;
+# this file exists for plain `pip install -r requirements.txt`.
+
+# Core
+python-dotenv>=1.0.0
+
+# Vector database
+chromadb>=0.4.0
+
+# Local embeddings
+sentence-transformers>=2.2.0
+
+# Repository handling
+gitpython>=3.1.0
+
+# Token counting
+tiktoken>=0.5.0
+
+# Cloud LLM (Google Gemini)
+google-genai>=1.0.0
+
+# API backend
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+requests>=2.31.0
+
+# Alternative Streamlit frontend (src/app.py)
+streamlit>=1.30.0
+
+# Advanced retrieval (multi-language AST chunking + hybrid search)
+tree-sitter>=0.21.0
+tree-sitter-language-pack>=1.8.1
+rank_bm25>=0.2.2
+
+# Logging
+loguru>=0.7.3
+
+# Testing (also available via the [dev] extra in pyproject.toml)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0

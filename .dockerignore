@@ -1,0 +1,16 @@
+.venv
+node_modules
+codelens-ui
+data
+logs
+.pytest_cache
+.benchmarks
+.agent
+.github
+**/__pycache__
+*.pyc
+.env
+uv.lock
+tests
+evals
+.git
