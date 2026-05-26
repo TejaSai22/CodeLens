@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 520" font-family="'JetBrains Mono','SFMono-Regular',Consolas,monospace" width="940" height="520">
+  <!-- self-contained dark card so it reads on both GitHub light & dark themes -->
+  <rect x="0" y="0" width="940" height="520" rx="14" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="939" height="519" rx="14" fill="none" stroke="#21262d"/>
+
+  <text x="28" y="40" fill="#e6edf3" font-size="19" font-weight="600">code<tspan fill="#2dd4bf">lens</tspan></text>
+  <text x="118" y="40" fill="#6e7681" font-size="12">architecture · hybrid code RAG</text>
+
+  <!-- defs -->
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#6e7681"/>
+    </marker>
+    <marker id="arrTeal" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#2dd4bf"/>
+    </marker>
+  </defs>
+
+  <!-- Frontend -->
+  <rect x="270" y="64" width="400" height="62" rx="9" fill="#161b22" stroke="#30363d"/>
+  <text x="470" y="90" fill="#e6edf3" font-size="13" font-weight="600" text-anchor="middle">React + Vite UI</text>
+  <text x="470" y="110" fill="#8b949e" font-size="11" text-anchor="middle">chat · streaming answers · "show your work" retrieval panel</text>
+
+  <!-- arrow down -->
+  <line x1="470" y1="126" x2="470" y2="158" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="482" y="147" fill="#6e7681" font-size="10">HTTP · SSE</text>
+
+  <!-- FastAPI -->
+  <rect x="270" y="160" width="400" height="58" rx="9" fill="#161b22" stroke="#30363d"/>
+  <text x="470" y="184" fill="#e6edf3" font-size="13" font-weight="600" text-anchor="middle">FastAPI backend</text>
+  <text x="470" y="203" fill="#8b949e" font-size="11" text-anchor="middle">/index · /query · /query/stream · /repos</text>
+
+  <!-- three branches -->
+  <line x1="470" y1="218" x2="470" y2="240" stroke="#6e7681" stroke-width="1.5"/>
+  <line x1="150" y1="240" x2="790" y2="240" stroke="#6e7681" stroke-width="1.5"/>
+  <line x1="150" y1="240" x2="150" y2="264" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="470" y1="240" x2="470" y2="264" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="790" y1="240" x2="790" y2="264" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Ingestion -->
+  <rect x="40" y="266" width="220" height="120" rx="9" fill="#161b22" stroke="#30363d"/>
+  <text x="150" y="290" fill="#e6edf3" font-size="12" font-weight="600" text-anchor="middle">Ingestion</text>
+  <text x="150" y="312" fill="#8b949e" font-size="10.5" text-anchor="middle">repo_loader · clone / read</text>
+  <text x="150" y="330" fill="#8b949e" font-size="10.5" text-anchor="middle">chunker · tree-sitter AST</text>
+  <text x="150" y="348" fill="#8b949e" font-size="10.5" text-anchor="middle">embedder · local MiniLM</text>
+  <text x="150" y="370" fill="#6e7681" font-size="10" text-anchor="middle">10 languages, syntax-aware</text>
+
+  <!-- Retrieval -->
+  <rect x="300" y="266" width="340" height="170" rx="9" fill="#161b22" stroke="#30363d"/>
+  <text x="470" y="290" fill="#e6edf3" font-size="12" font-weight="600" text-anchor="middle">Hybrid Retrieval</text>
+
+  <rect x="320" y="304" width="140" height="50" rx="7" fill="#0d1117" stroke="#3b4754"/>
+  <text x="390" y="325" fill="#818cf8" font-size="11" font-weight="600" text-anchor="middle">vector</text>
+  <text x="390" y="342" fill="#8b949e" font-size="9.5" text-anchor="middle">ChromaDB · cosine</text>
+
+  <rect x="480" y="304" width="140" height="50" rx="7" fill="#0d1117" stroke="#3b4754"/>
+  <text x="550" y="325" fill="#2dd4bf" font-size="11" font-weight="600" text-anchor="middle">keyword</text>
+  <text x="550" y="342" fill="#8b949e" font-size="9.5" text-anchor="middle">BM25 · lexical</text>
+
+  <line x1="390" y1="354" x2="450" y2="384" stroke="#6e7681" stroke-width="1.3" marker-end="url(#arr)"/>
+  <line x1="550" y1="354" x2="490" y2="384" stroke="#6e7681" stroke-width="1.3" marker-end="url(#arr)"/>
+  <rect x="370" y="386" width="200" height="38" rx="7" fill="#0d1117" stroke="#3b4754"/>
+  <text x="470" y="409" fill="#e6edf3" font-size="11" text-anchor="middle">RRF fusion → ranked + provenance</text>
+
+  <!-- Generation -->
+  <rect x="680" y="266" width="220" height="120" rx="9" fill="#161b22" stroke="#30363d"/>
+  <text x="790" y="290" fill="#e6edf3" font-size="12" font-weight="600" text-anchor="middle">Generation</text>
+  <text x="790" y="312" fill="#8b949e" font-size="10.5" text-anchor="middle">llm_client · Gemini 2.5</text>
+  <text x="790" y="330" fill="#8b949e" font-size="10.5" text-anchor="middle">grounded · cited answer</text>
+  <text x="790" y="348" fill="#8b949e" font-size="10.5" text-anchor="middle">native thinking (internal)</text>
+  <text x="790" y="370" fill="#6e7681" font-size="10" text-anchor="middle">streamed token-by-token</text>
+
+  <!-- provenance feedback to UI -->
+  <path d="M470 436 C 470 470, 905 478, 905 250 C 905 150, 700 132, 672 110"
+        fill="none" stroke="#2dd4bf" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrTeal)"/>
+  <text x="700" y="460" fill="#2dd4bf" font-size="10">why each chunk matched → UI panel</text>
+</svg>
